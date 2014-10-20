@@ -48,6 +48,8 @@ public class UploadSoundGramService extends IntentService {
 			
 				// Delete local copy
 				deleteRecursive(new File(intent.getStringExtra(directory)));
+				//to delete cache directory from Soundgram cache - tuf77221
+				deleteCache(new File(intent.getStringExtra(audio)));
 			}
 			
 			//Broadcast completion to refresh streams.
@@ -60,6 +62,11 @@ public class UploadSoundGramService extends IntentService {
 		}
 	}
 	
+	//Cache deletion (cache used to save audio files while clicking soundgram image) - tuf77221
+	public static void deleteCache(File file)
+	{
+		file.delete();
+	}
 	public static void deleteRecursive(File fileOrDirectory) {
 	    if (fileOrDirectory.isDirectory())
 	        for (File child : fileOrDirectory.listFiles())

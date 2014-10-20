@@ -1,29 +1,50 @@
 package edu.temple.soundgram;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URL;
+import java.net.URLConnection;
 
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpResponse;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.params.BasicHttpParams;
+import org.apache.http.params.HttpParams;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
 import com.nostra13.universalimageloader.core.ImageLoader;
 
-import edu.temple.soundgram.util.API;
-import edu.temple.soundgram.util.UploadSoundGramService;
+import android.annotation.SuppressLint;
 import android.app.Activity;
+import edu.temple.soundgram.util.*;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.Color;
+import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.net.Uri;
+import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Message;
 import android.provider.MediaStore;
+import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
@@ -36,7 +57,7 @@ import android.widget.Toast;
 public class MainActivity extends Activity {
 	
 	int userId = 111;
-	
+	Boolean flag;
 
 	int TAKE_PICTURE_REQUEST_CODE = 11111111;
 	int RECORD_AUDIO_REQUEST_CODE = 11111112;
@@ -75,6 +96,11 @@ public class MainActivity extends Activity {
 		ll = (LinearLayout) findViewById(R.id.imageLinearLayout);
 		
 		loadStream();
+		//Creating cache directories for Soundgram - tuf77221
+		File dir = new File(Environment.getExternalStorageDirectory().toString()+"/"+getString(R.string.app_name));
+		dir.mkdir();
+		dir = new File(Environment.getExternalStorageDirectory().toString()+"/"+getString(R.string.app_name)+"/cache");
+		dir.mkdir();
 	}
 	
 	@Override
@@ -137,6 +163,7 @@ public class MainActivity extends Activity {
 				
 				@Override
 				public void onClick(View v) {
+					//commented for now as this is handled while caching audio files - tuf77221
 					MediaPlayer mPlayer = new MediaPlayer();
 			        try {
 			            mPlayer.setDataSource(audio.toString());
@@ -144,8 +171,7 @@ public class MainActivity extends Activity {
 			            mPlayer.start();
 			        } catch (IOException e) {
 			            e.printStackTrace();
-			        }
-					
+			        }					 
 				}
 			});
 			
@@ -231,6 +257,21 @@ public class MainActivity extends Activity {
 		}
 	});
 	
+	
+	//handler for playing audio in media player from cache - tuf77221
+		final Handler playAudioFile = new Handler(new Handler.Callback() {
+			
+			@Override
+			public boolean handleMessage(Message msg) {
+				// TODO Auto-generated method stub
+				//Load browser
+				playAudio(((File)msg.obj).toString());
+				Log.i("Soundgram Cache", "File created. Played from Cache.");
+				Log.e(INPUT_SERVICE, msg.obj.toString());
+				return false;
+			}
+		});
+	
 	private View getSoundGramView(final JSONObject soundgramObject){
 		LinearLayout soundgramLayout = new LinearLayout(this);
 		
@@ -248,26 +289,168 @@ public class MainActivity extends Activity {
 			
 			@Override
 			public void onClick(View v) {
-				MediaPlayer mPlayer = new MediaPlayer();
-		        try {
-		            mPlayer.setDataSource(soundgramObject.getString("audio_url"));
-		            mPlayer.prepare();
-		            mPlayer.start();
-				} catch (Exception e) {
-					e.printStackTrace();
-				}
-			}
-		});
-		
-		soundgramLayout.addView(soundgramImageView);
-		
-		return soundgramLayout;
+				/*MediaPlayer mPlayer = new MediaPlayer(); 
+						try { 
+							//mPlayer.setDataSource(soundgramObject.getString("audio_url")); 
+							mPlayer.setDataSource(audio.getAbsolutePath());
+							mPlayer.prepare(); 
+							mPlayer.start(); 
+							} catch (Exception e) { 
+								e.printStackTrace(); 
+							} */
+				
+				//to play audio file from cache or save to cache and play
+				String fileURL ="";
+							try{				
+								fileURL = soundgramObject.getString("audio_url");
+							}catch(JSONException e){e.printStackTrace();}
+							String fileName = fileURL.substring(fileURL.lastIndexOf("=")+1);
+						String audioFilename = Environment.getExternalStorageDirectory().getAbsolutePath() + "/" + getString(R.string.app_name) +"/cache/"+fileName;
+					       File output = new File(audioFilename);
+					       if(output.exists() && output.isFile())
+					        {
+					        	playAudio(output.toString());
+					        	Log.i("Soundgram Cache", "File exists. Played from Cache.");		        		
+					        }
+					        else{
+					        	Log.i("Soundgram Cache", "Downloading audio file");
+					        	//output.mkdir();
+					        	Thread t = new Thread(){					        		
+					        	@Override
+					        	public void run(){
+					        		 try
+					     			{
+					        			 String filePath ="";
+											try{				
+												filePath = soundgramObject.getString("audio_url");
+											}catch(Exception e){e.printStackTrace();}
+											String fileName = filePath.substring(filePath.lastIndexOf("=")+1);
+						     				File file = new File(Environment.getExternalStorageDirectory().getAbsolutePath()+"/"+getString(R.string.app_name)+"/cache/"+fileName);
+						     				
+						     				OutputStream outputStream = new BufferedOutputStream(new FileOutputStream(file));
+					     				URL url = new URL(filePath);
+					     				HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
+					    				urlConnection.setRequestMethod("GET");
+					    				urlConnection.setDoOutput(true);
+					    				urlConnection.connect();
+					     				InputStream input = urlConnection.getInputStream();
+
+					     				int totalSize = urlConnection.getContentLength();
+					     				int downloadSize = 0;
+					     				
+					     				byte[] buffer = new byte[4096];
+					     				int bufferLen = -1;
+					     				while((bufferLen = input.read(buffer)) != -1)
+					     				{
+					     					outputStream.write(buffer, 0, bufferLen);
+					     				}
+						     			outputStream.flush();
+					     				outputStream.close();
+					     				input.close();
+						        		 Log.i("Soundgram Cache", "File downloaded");
+						        		 Message msg = Message.obtain();
+						        		 msg.obj = file;
+						        		 playAudioFile.sendMessage(msg);
+					     			}
+					     			catch(MalformedURLException e)
+					     			{ e.printStackTrace();}
+					     			catch(IOException e)
+					     			{ e.printStackTrace();}
+					     			catch(Exception e)
+					     			{ e.printStackTrace();}
+					        	 }
+						};
+						t.start();
+						
+					  }
+					      
+					} 
+				}); 
+				soundgramLayout.addView(soundgramImageView); 
+				return soundgramLayout; 
+
 	}
 	
 	@Override
 	public void onDestroy(){
 		super.onDestroy();
 		unregisterReceiver(refreshReceiver);
+	}
+	
+	//to play audio file from cache - tuf77221
+	public void playAudio(String filePathName)
+	{
+		  try {
+	        	 
+			  	 MediaPlayer mPlayer = new MediaPlayer();
+			  	mPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
+			  	mPlayer.setDataSource(filePathName);
+			  	mPlayer.prepare();
+			  	mPlayer.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
+					
+					@Override
+					public void onPrepared(MediaPlayer mp) {
+						// TODO Auto-generated method stub
+						mp.start();
+					}
+				});
+	            
+	            //mPlayer.start();
+			} catch (Exception e) {
+				e.printStackTrace();
+			}
+	}
+	//in case to use AsyncTask - the code here - tuf77221
+	public class saveFileFromURLToCache extends AsyncTask<String, Void, Boolean>
+	{
+		private Exception exception;
+		
+		@Override
+		public Boolean doInBackground(String... fileStrings)
+		{
+			flag = false;
+			try
+			{
+				String filePath = fileStrings[0];
+				String audioFile = fileStrings[1];
+				URL url = new URL(filePath);
+				HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
+				urlConnection.setRequestMethod("GET");
+				urlConnection.setDoOutput(true);
+				urlConnection.connect();
+				//File file = new File(Environment.getDownloadCacheDirectory(), audioFile);
+				File file = new File(Environment.getExternalStorageDirectory()+"/"+getString(R.string.app_name)+"/cache", audioFile);
+				if(!file.exists())
+				{
+					file.createNewFile();
+				}
+				FileOutputStream fileOut = new FileOutputStream(file);
+				InputStream inputStream = urlConnection.getInputStream();
+				int totalSize = urlConnection.getContentLength();
+				int downloadSize = 0;
+				
+				byte[] buffer = new byte[1024];
+				int bufferLen = 0;
+				while((bufferLen = inputStream.read(buffer)) >0)
+				{
+					fileOut.write(buffer, 0, bufferLen);
+					downloadSize += bufferLen;
+				}
+				if(downloadSize>0)
+				{
+					flag = true;
+				}
+				fileOut.close();
+			}
+			catch(MalformedURLException e)
+			{ e.printStackTrace();}
+			catch(IOException e)
+			{ e.printStackTrace();}
+			catch(Exception e)
+			{ e.printStackTrace();}
+			return flag;
+			
+		}
 	}
 	
 }
